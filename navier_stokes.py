@@ -23,7 +23,8 @@ from utils import log_stats, log, off_diagonal,get_loader_ns, get_eval_loader_ns
 
 
 from torch.utils.tensorboard import SummaryWriter
-
+from datasets import load_dataset
+from torch.utils.data import DataLoader, Dataset
 
 def get_arguments():
     parser = argparse.ArgumentParser(
@@ -107,9 +108,6 @@ def get_arguments():
     # baseline
     parser.add_argument("--supervised-only", type=int, default=0,
                         help='only compute supervised baseline')
-
-
-
     return parser
 
 
@@ -494,14 +492,14 @@ class PDETrainer():
 
 
 def get_shared_folder() -> Path:
-    user = os.getenv("USER")
-    path = "/checkpoint/"
-    if Path(path).is_dir():
-        p = Path(f"{path}{user}/experiments")
-        p.mkdir(exist_ok=True)
-        return p
-    raise RuntimeError("No shared folder available")
-
+    # user = os.getenv("USER")
+    # path = "/checkpoint/"
+    # if Path(path).is_dir():
+    #     p = Path(f"{path}{user}/experiments")
+    #     p.mkdir(exist_ok=True)
+    #     return p
+    # raise RuntimeError("No shared folder available")
+    return Path.cwd()
 
 def get_init_file():
     # Init file must not exist, but it's parent dir must exist.

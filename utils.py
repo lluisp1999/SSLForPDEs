@@ -16,7 +16,7 @@ from pathlib import Path
 from torch import nn
 from typing import Optional, List, Tuple
 from torch.utils.data import Dataset
-
+from datasets import load_dataset
 
 from transformations import NSTransforms
 # ========================================================
@@ -95,11 +95,10 @@ class LPSNavierStokes(object):
 
         return image
 
-
 class NSDataset(Dataset):
     def __init__(
             self,
-            data_root: str = "/data/pde_arena/NavierStokes2D_cond_smoke_v1/",
+            data_root: str = "pdearena/NavierStokes-2D-conditioned", # <-- Changed default
             transforms_strength: Optional[List[float]] = [0] * 9,
             steps: Optional[int] = 2,
             order: Optional[int] = 2,
@@ -108,9 +107,11 @@ class NSDataset(Dataset):
             size: Optional[int] = 100000,
             ):
 
-        self.data_root = Path(data_root)
         self.mode = mode
-        self.size=size
+        # Load dataset from Hugging Face
+        self.hf_dataset = load_dataset(data_root, split=mode)
+        self.size = min(size, len(self.hf_dataset))
+
 
         self.transform = LPSNavierStokes(
             transforms_strength=transforms_strength,
@@ -119,58 +120,25 @@ class NSDataset(Dataset):
             crop_size=crop_size,
             )
 
-        self.h5_files = []
-
-        #Get all training files
-        files = []
-        for file in self.data_root.iterdir():
-            if str(file)[-2:] != "h5" or not self.mode in str(file):
-                continue
-            files.append(str(file))
-
-        #Sort files
-        def extract_seed(path):
-            path = str(path)
-            if "train" in path:
-                seed = int(path.split('_')[-3])
-            else:
-                seed = int(path.split('_')[-2])
-            return seed    
-        files.sort(key=extract_seed)
-
-        #Create data
-        for file in files:
-            self.h5_files.append(h5py.File(str(file), 'r'))
-
-        self.size_per_file = 32
-
     def __len__(self):
-        return len(self.h5_files * self.size_per_file)
+        return self.size
 
     def __getitem__(self, idx):
-        idx = idx % self.size
+        data = self.hf_dataset[idx]
 
-        file = idx // self.size_per_file
-        index = idx % self.size_per_file
+        vx = torch.Tensor(data['vx'])
+        vy = torch.Tensor(data['vy'])
+        x_ = data['x']
+        y_ = data['y']
+        t_ = data['t']
 
-        if self.mode == "val":    
-            data = self.h5_files[file]['valid']
-        else:
-            data = self.h5_files[file][self.mode]
+        x = torch.Tensor(np.tile(np.tile(x_, (len(y_), 1)), (len(t_), 1, 1)))
+        y = torch.Tensor(np.tile(np.tile(y_, (len(x_), 1)).T, (len(t_), 1, 1)))
+        t = torch.Tensor(np.tile(t_, (len(x_), len(y_), 1)).T)
 
-        vx = torch.Tensor(data['vx'][index])
-        vy = torch.Tensor(data['vy'][index])
-        x_ = data['x'][index]
-        y_ = data['y'][index]
-        t_ = data['t'][index]
+        b = data['buo_y']
 
-        x = torch.Tensor(np.tile(np.tile(x_, (y_.shape[0], 1)), (t_.shape[0], 1, 1)))
-        y = torch.Tensor(np.tile(np.tile(y_, (x_.shape[0], 1)).T, (t_.shape[0], 1, 1)))
-        t = torch.Tensor(np.tile(t_, (x_.shape[0], y_.shape[0], 1)).T)
-
-        b = data['buo_y'][index]
-
-        sample = (x, y, t, vx, vy) 
+        sample = (x, y, t, vx, vy)
         view_1 = self.transform(sample)
         view_2 = self.transform(sample)
         view_1 = view_1.flatten(0, 1)
@@ -180,6 +148,7 @@ class NSDataset(Dataset):
 
 
 def get_loader_ns(data_root, batch_size, steps, order, num_workers, strengths, mode, crop_size, dataset_size):
+    # data_root can now be the Hugging Face dataset name
     dataset = NSDataset(data_root, strengths, steps, order, mode=mode, crop_size=crop_size,size=dataset_size)
 
     loader = torch.utils.data.DataLoader(
@@ -194,76 +163,48 @@ def get_loader_ns(data_root, batch_size, steps, order, num_workers, strengths, m
 class NSDatasetEval(Dataset):
     def __init__(
             self,
-            data_root: str = "/data/pde_arena/NavierStokes2D_cond_smoke_v1/",
+            data_root: str = "pdearena/NavierStokes-2D-conditioned", # <-- Changed default
             mode: str = "test",
             crop_size: Optional[Tuple[int]] = (56, 64, 64)
             ):
 
-        self.data_root = Path(data_root)
         self.mode = mode
+        # Load dataset from Hugging Face
+        self.hf_dataset = load_dataset(data_root, split=mode)
+
 
         self.transform = LPSNavierStokes(
             crop_size=crop_size,
             order=0,
             steps=0,
-            ) 
-    
-        self.h5_files = []
-        
-        #Get all training files
-        files = []
-        for file in self.data_root.iterdir():
-            if str(file)[-2:] != "h5" or not self.mode in str(file):
-                continue
-            files.append(str(file))
-        
-        #Sort files
-        def extract_seed(path):
-            path = str(path)
-            if "train" in path:
-                seed = int(path.split('_')[-3])
-            else:
-                seed = int(path.split('_')[-2])
-            return seed    
-        files.sort(key=extract_seed)
-        
-        #Create data
-        for file in files:
-            self.h5_files.append(h5py.File(str(file),'r'))
-     
-        self.size_per_file = 32
-        
+            )
+
     def __len__(self):
-        return len(self.h5_files*self.size_per_file)
+        return len(self.hf_dataset)
 
     def __getitem__(self, idx):
-        file = idx // self.size_per_file
-        index = idx % self.size_per_file
-        
-        if self.mode == "val":    
-            data = self.h5_files[file]['valid']
-        else:
-            data = self.h5_files[file][self.mode]
-        
-        vx = torch.Tensor(data['vx'][index])
-        vy = torch.Tensor(data['vy'][index])
-        x_ = data['x'][index]
-        y_ = data['y'][index]
-        t_ = data['t'][index]
+        data = self.hf_dataset[idx]
 
-        x =  torch.Tensor(np.tile(np.tile(x_,(y_.shape[0],1)),(t_.shape[0],1,1)))
-        y = torch.Tensor(np.tile(np.tile(y_,(x_.shape[0],1)).T,(t_.shape[0],1,1)))
-        t = torch.Tensor(np.tile(t_,(x_.shape[0],y_.shape[0],1)).T)
+        vx = torch.Tensor(data['vx'])
+        vy = torch.Tensor(data['vy'])
+        x_ = data['x']
+        y_ = data['y']
+        t_ = data['t']
 
-        b = data['buo_y'][index]
-        
-        sample = (x, y, t, vx, vy) 
+        x =  torch.Tensor(np.tile(np.tile(x_,(len(y_),1)),(len(t_),1,1)))
+        y = torch.Tensor(np.tile(np.tile(y_,(len(x_),1)).T,(len(t_),1,1)))
+        t = torch.Tensor(np.tile(t_,(len(x_),len(y_),1)).T)
+
+        b = data['buo_y']
+
+        sample = (x, y, t, vx, vy)
         view_1 = self.transform(sample)
         view_1 = view_1.flatten(0, 1)
         return view_1, np.float32(b)
 
 
 def get_eval_loader_ns(data_root, batch_size, num_workers, mode,crop_size):
+    # data_root can now be the Hugging Face dataset name
     dataset = NSDatasetEval(data_root,mode=mode,crop_size=crop_size)
     loader = torch.utils.data.DataLoader(
         dataset=dataset,
